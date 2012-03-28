@@ -55,6 +55,13 @@ def parseOpts():
                       default=False,
                       help='Be verbose. Defaults to "False"')
 
+    # Enable valgrind support.
+    parser.add_option('-V', '--verify-fixed',
+                      dest='verifyfixed',
+                      action='store_true',
+                      default=False,
+                      help='Verify fix and comment. Defaults to "False"')
+
     (options, args) = parser.parse_args()
 
     if len(args) < 1:
@@ -74,20 +81,24 @@ def main():
     username, password = get_credentials()
 
     # Sample run
-    bugmon = BugMonitor(API_ROOT, username, password, options.repobase)
+    bugmon = BugMonitor(API_ROOT, username, password, options.repobase, options)
 
     for bug_id in args:
       print "====== Analyzing bug " + str(bug_id) + " ======"
       try:
-        print bugmon.reproduceBug(bug_id)
+        if options.verifyfixed:
+          bugmon.verifyFixedBug(bug_id)
+        else:
+          result = bugmon.reproduceBug(bug_id)
       except Exception as e:
         print "Caught exception: " + str(e)
 
 
 class BugMonitor:
 
-  def __init__(self, api, username, password, repoBase):
-    self.bz = BugzillaAgent(api, username, password)
+  def __init__(self, apiroot, username, password, repoBase, options):
+    self.apiroot = apiroot
+    self.bz = BugzillaAgent(apiroot, username, password)
     
     # Different result states:
     #  FAILED               - Unable to reproduce on original revision
@@ -100,6 +111,32 @@ class BugMonitor:
 
     # Here we store the tip revision per repository for caching purposes
     self.tipRev = {}
+
+    # Misc options
+    self.options = options
+
+  def postComment(self, bugnum, comment):
+    url = urljoin(self.apiroot, 'bug/%s/comment?%s' % (bugnum, self.bz.qs()))
+    return Comment(text=comment).post_to(url)
+
+  def verifyFixedBug(self, bugnum):
+    # Fetch the bug
+    bug = self.bz.get_bug(bugnum)
+
+    if (bug.status == "RESOLVED" and bug.resolution == "FIXED"):
+      result = self.reproduceBug(bugnum)
+
+      if (result == self.result.REPRODUCED_FIXED):
+        print "Marking bug " + str(bugnum) + " as verified fixed..."
+        # Add a comment
+        self.postComment(bugnum, "JSBugMon: This bug has been automatically verified fixed.")
+        # Need to refetch the bug...
+        bug = self.bz.get_bug(bugnum)
+        # Mark VERIFIED FIXED now
+        bug.status = "VERIFIED"
+        bug.put()
+
+    return
 
   def reproduceBug(self, bugnum):
     # Fetch the bug
@@ -160,10 +197,11 @@ class BugMonitor:
       print "Compiling a new shell for tip (revision " + self.tipRev[repoDir] + ")"
       tipShell = makeShell("cache/", repoDir, arch, "dbg", 0, self.tipRev[repoDir])
 
-    origRev = self.hgUpdate(repoDir, rev)
 
     origShell = self.getCachedShell("cache/", arch, "dbg", 0, rev)
+
     if (origShell == None):
+      origRev = self.hgUpdate(repoDir, rev)
       print "Compiling a new shell for orig (revision " + rev + ")"
       origShell = makeShell("cache/", repoDir, arch, "dbg", 0, rev)
 
