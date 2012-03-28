@@ -198,6 +198,7 @@ class BugMonitor:
       raise Exception("Error: Failed to isolate original revision for test")
 
     opts = None
+    tipOpts = None
 
     # Isolate options for testing, not explicitly instructed to guess
     if not self.options.guessopts:
@@ -206,12 +207,14 @@ class BugMonitor:
         print "Warning: No options found, will try to guess"
 
     arch = None
+    archList = None
     if (bug.platform == "x86_64"):
       arch = "64"
     elif (bug.platform == "x86"):
       arch = "32"
     elif (bug.platform == "All"):
-      arch = "64" # TODO: Detect native platform here
+      arch = "64"
+      archList = [ "64", "32" ] # TODO: Detect native platform here
     else:
       raise Exception("Error: Unsupported architecture \"" + bug.platform + "\" required by bug")
 
@@ -242,7 +245,7 @@ class BugMonitor:
       blocks = text.split("\n\n")
       found = False
       cnt = 0
-      for block in blocks:
+      for i,block in enumerate(blocks):
         # Write our test to file
         outFile = open(testFile, "w")
         outFile.write(block)
@@ -250,8 +253,30 @@ class BugMonitor:
         (err, ret) = testBinary(tipShell, testFile, [], 0)
 
         if (err.find("SyntaxError") < 0):
+          # We have found the test (or maybe only the start of the test)
+          # Try adding more code until we hit an error or are out of
+          # blocks.
+          oldBlock = block
+          curBlock = block
+          for j,block in enumerate(blocks):
+            if j > i:
+              curBlock = curBlock + "\n" + block
+              # Write our test to file
+              outFile = open(testFile, "w")
+              outFile.write(curBlock)
+              outFile.close()
+              (err, ret) = testBinary(tipShell, testFile, [], 0)
+              if (err.find("SyntaxError") >= 0):
+                # Too much, write oldBlock and break
+                outFile = open(testFile, "w")
+                outFile.write(oldBlock)
+                outFile.close()
+                break
+              else:
+                oldBlock = curBlock
+
           found = True
-          print "Isolated possible testcase in textblock " + str(cnt)
+          print "Isolated possible testcase starting in textblock " + str(cnt)
           break
         cnt += 1
       if not found:
@@ -260,29 +285,39 @@ class BugMonitor:
     (oouterr, oret) = (None, None)
     (origShell, origRev) = (None, None)
 
+    # If we have an exact architecture, we will only test that
+    if (archList == None):
+      archList = [ arch ]
+
     for compileType in ['dbg', 'opt']:
-      # Update to tip and cache result:
-      updated = False
-      if not self.tipRev.has_key(repoDir):
-        # If we don't know the tip revision for this branch, update and get it
-        self.tipRev[repoDir] = self.hgUpdate(repoDir)
-        updated = True
-    
-      (tipShell, tipRev) = self.getShell("cache/", arch, compileType, 0, self.tipRev[repoDir], updated, repoDir)
-      (origShell, origRev) = self.getShell("cache/", arch, compileType, 0, rev, False, repoDir)
+      for archType in archList:
+        # Update to tip and cache result:
+        updated = False
+        if not self.tipRev.has_key(repoDir):
+          # If we don't know the tip revision for this branch, update and get it
+          self.tipRev[repoDir] = self.hgUpdate(repoDir)
+          updated = True
+      
+        (tipShell, tipRev) = self.getShell("cache/", archType, compileType, 0, self.tipRev[repoDir], updated, repoDir)
+        (origShell, origRev) = self.getShell("cache/", archType, compileType, 0, rev, False, repoDir)
 
 
-      if (opts != None):
-        (oouterr, oret) = testBinary(origShell, testFile, opts , 0, verbose=self.options.verbose)
-      else:
-        print "Guessing options...",
-        guessopts = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', '']
-        for opt in guessopts:
-          print " " + opt,
-          opts = opt.split(' ')
+        if (opts != None):
           (oouterr, oret) = testBinary(origShell, testFile, opts , 0, verbose=self.options.verbose)
-          if (oret < 0):
-            break;
+        else:
+          print "Guessing options...",
+          guessopts = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', '']
+          for opt in guessopts:
+            print " " + opt,
+            topts = opt.split(' ')
+            (oouterr, oret) = testBinary(origShell, testFile, topts , 0, verbose=self.options.verbose)
+            if (oret < 0):
+              opts = topts
+              break;
+
+        # If we reproduced with one arch, then we don't need to try the others
+        if (oret < 0):
+          break;
 
       # If we reproduced with dbg, then we don't need to try opt
       if (oret < 0):
@@ -292,19 +327,36 @@ class BugMonitor:
     if (oret < 0):
       print ""
       print "Successfully reproduced bug (exit code " + str(oret) + ") on original revision " + rev + ":"
-      print oouterr
+      errl = oouterr.split("\n")
+      if len(errl) > 2: errl = errl[-2:]
+      for err in errl:
+        print err
 
       if (opts != None):
         # Try running on tip now
         print "Testing bug on tip..."
-        (touterr, tret) = testBinary(tipShell, testFile, opts , 0, verbose=self.options.verbose)
+        if self.options.guessopts:
+          guessopts = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', '']
+          for opt in guessopts:
+            print " " + opt,
+            tipOpts = opt.split(' ')
+            (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose)
+            if (tret < 0):
+              break;
+        else:
+          tipOpts = opts
+          (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose)
       else:
         print ""
 
       if (tret < 0):
         if (tret == oret):
-          print "Result: Bug still reproduces"
-          return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_TIP)
+          if (opts == tipOpts):
+            print "Result: Bug still reproduces"
+            return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_TIP)
+          else:
+            print "Result: Bug still reproduces, but with different options: " + " ".join(tipOpts) # TODO need another code here in the future
+            return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_TIP)
         else:
           # Unlikely but possible, switched signal
           print "Result: Bug now reproduces with signal " + str(tret) + " (previously " + str(oret) + ")"
