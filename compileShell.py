@@ -20,6 +20,15 @@ sys.path.append(path1)
 from subprocesses import captureStdout, macType, normExpUserPath, vdump
 from countCpus import cpuCount
 
+import signal
+
+class Alarm(Exception):
+    pass
+
+def alarm_handler(signum, frame):
+    raise Alarm
+
+
 def hgHashAddToFuzzPath(fuzzPath, repoDir):
     '''
     This function finds the mercurial revision and appends it to the directory name.
@@ -206,6 +215,8 @@ def cfgJsBin(archNum, compileType, threadsafe, configure, objdir):
                 cfgCmdList[counter] = cfgCmdList[counter].replace(os.sep, '\\\\')
             counter = counter + 1
 
+    print cfgCmdList
+    print cfgEnvList
     captureStdout(cfgCmdList, ignoreStderr=True, currWorkingDir=objdir, env=cfgEnvList)
 
 def shellName(archNum, compileType, extraID, vgSupport):
@@ -303,8 +314,13 @@ def makeShell(shellCacheDir, sourceDir, archNum, compileType, valgrindSupport, c
     return shell
 
 # Run the testcase on the compiled js binary.
-def testBinary(shell, file, flagsRequired, valgSupport, verbose=False):
+def testBinary(shell, file, flagsRequired, valgSupport, verbose=False, timeout=None):
     testBinaryCmd = [shell] + flagsRequired + [file]
+
+    #if (timeout != None):
+    #  testBinaryCmd.insert(0, str(timeout));
+    #  testBinaryCmd.insert(0, "timeout");
+
     if valgSupport:
         valgPrefixCmd = []
         valgPrefixCmd.append('valgrind')
@@ -317,8 +333,20 @@ def testBinary(shell, file, flagsRequired, valgSupport, verbose=False):
 
     # Capture stdout and stderr into the same string.
     p = subprocess.Popen(testBinaryCmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.communicate()
-    retCode = p.returncode
+
+    (out,err) = ('', '')
+    retCode = 0
+
+    if (timeout != None):
+        signal.signal(signal.SIGALRM, alarm_handler)
+        signal.alarm(timeout)  # 5 minutes
+    try:
+        out, err = p.communicate()
+        signal.alarm(0)
+        retCode = p.returncode
+    except Alarm:
+        p.terminate()
+
     if verbose:
         print 'The exit code is:', retCode
         if len(out) > 0:
