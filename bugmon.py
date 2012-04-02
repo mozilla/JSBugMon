@@ -61,11 +61,23 @@ def parseOpts():
                       default=False,
                       help='Verify fix and comment. Defaults to "False"')
 
+    parser.add_option('-C', '--confirm',
+                      dest='confirm',
+                      action='store_true',
+                      default=False,
+                      help='Attempt to confirm (or deny) open bugs. Defaults to "False"')
+
     parser.add_option('-U', '--update-bug',
                       dest='updatebug',
                       action='store_true',
                       default=False,
                       help='Update the bug. Defaults to "False"')
+
+    parser.add_option('-P', '--update-bug-positive',
+                      dest='updatebugpositive',
+                      action='store_true',
+                      default=False,
+                      help='Update the bug also when it not changes state. Defaults to "False"')
 
     parser.add_option('-G', '--guess-opts',
                       dest='guessopts',
@@ -99,6 +111,8 @@ def main():
       try:
         if options.verifyfixed:
           bugmon.verifyFixedBug(bug_id, options.updatebug)
+        elif options.confirm:
+          bugmon.confirmOpenBug(bug_id, options.updatebug, options.updatebugpositive)
         else:
           result = bugmon.reproduceBug(bug_id)
       except Exception as e:
@@ -132,6 +146,10 @@ class BugMonitor:
     # Here we store the tip revision per repository for caching purposes
     self.tipRev = {}
 
+    self.guessopts = {}
+    self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
+    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', '--ion -n', '--ion -n --ion-eager', None]
+
     # Misc options
     self.options = options
 
@@ -161,20 +179,76 @@ class BugMonitor:
 
     return
 
-  def confirmOpenBug(self, bugnum, updateBug):
+  def confirmOpenBug(self, bugnum, updateBug, updateBugPositive):
     # Fetch the bug
     bug = self.bz.get_bug(bugnum)
 
     if (bug.status != "RESOLVED" and bug.status != "VERIFIED"):
+      bugUpdateRequested = False
+      bugConfirmRequested = False
+      bugCloseRequested = False
+      bugUpdated = False
+
+      closeBug = False
+
+      wbOpts = []
+      if (bug.whiteboard != None):
+        ret = re.compile('\[jsbugmon:([^\]]+)\]').search(bug.whiteboard)
+        if (ret != None and ret.groups > 1):
+          wbOpts = ret.group(1).split(",")
+
+      # Explicitly marked to ignore this bug
+      if ('ignore' in wbOpts):
+        return
+
+      if ('update' in wbOpts):
+        bugUpdateRequested = True
+
+      if ('reconfirm' in wbOpts):
+        bugConfirmRequested = True
+
+      if ('close' in wbOpts):
+        bugCloseRequested = True
+
       result = self.reproduceBug(bugnum)
 
       if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
-        if updateBug:
+        if updateBugPositive or bugConfirmRequested:
           print "Marking bug " + str(bugnum) + " as confirmed on tip..."
           # Add a comment
-          self.postComment(bugnum, "JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + rev + ").")
+          self.postComment(bugnum, "JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
+          bugUpdated = True
         else:
           print "Would mark bug " + str(bugnum) + " as confirmed on tip..."
+      elif (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+        if updateBug or bugUpdateRequested:
+          print "Marking bug " + str(bugnum) + " as non-reproducing on tip..."
+          # Add a comment
+          self.postComment(bugnum, "JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
+          bugUpdated = True
+
+          # Close bug only if requested to do so
+          closeBug = bugCloseRequested
+        else:
+          print "Would mark bug " + str(bugnum) + " as non-reproducing on tip..."
+
+      if bugUpdated:
+        # Fetch the bug again for updating
+        bug = self.bz.get_bug(bugnum)
+
+        # We add "ignore" to our bugmon options so we don't update the bug a second time
+        wbOpts.append('ignore')
+        wbParts = filter(lambda x: len(x) > 0, map(str.rstrip, map(str.lstrip, re.split('\[jsbugmon:[^\]]+\]', bug.whiteboard))))
+        wbParts.append("[jsbugmon:" + ",".join(wbOpts) + "]")
+        bug.whiteboard = " ".join(wbParts)
+
+        # Mark bug as WORKSFORME if confirmed to no longer reproduce
+        if closeBug:
+          bug.status = "RESOLVED"
+          bug.resolution = "WORKSFORME"
+
+        bug.put()
+
 
     return
 
@@ -220,6 +294,8 @@ class BugMonitor:
 
     if (bug.version == "Trunk"):
       reponame = "mozilla-central"
+    elif (bug.version == "Other Branch"):
+      reponame = "ionmonkey"
     else:
       raise Exception("Error: Unsupported branch \"" + bug.version + "\" required by bug")
 
@@ -250,7 +326,7 @@ class BugMonitor:
         outFile = open(testFile, "w")
         outFile.write(block)
         outFile.close()
-        (err, ret) = testBinary(tipShell, testFile, [], 0)
+        (err, ret) = testBinary(tipShell, testFile, [], 0, timeout=30)
 
         if (err.find("SyntaxError") < 0):
           # We have found the test (or maybe only the start of the test)
@@ -265,7 +341,7 @@ class BugMonitor:
               outFile = open(testFile, "w")
               outFile.write(curBlock)
               outFile.close()
-              (err, ret) = testBinary(tipShell, testFile, [], 0)
+              (err, ret) = testBinary(tipShell, testFile, [], 0, timeout=30)
               if (err.find("SyntaxError") >= 0):
                 # Too much, write oldBlock and break
                 outFile = open(testFile, "w")
@@ -280,6 +356,8 @@ class BugMonitor:
           break
         cnt += 1
       if not found:
+        # Ensure we don't cache the wrong test
+        os.remove(testFile)
         raise Exception("Error: Failed to isolate test from comment")
 
     (oouterr, oret) = (None, None)
@@ -303,14 +381,18 @@ class BugMonitor:
 
 
         if (opts != None):
-          (oouterr, oret) = testBinary(origShell, testFile, opts , 0, verbose=self.options.verbose)
+          (oouterr, oret) = testBinary(origShell, testFile, opts , 0, verbose=self.options.verbose, timeout=30)
         else:
           print "Guessing options...",
-          guessopts = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', '']
+          guessopts = self.guessopts[reponame]
           for opt in guessopts:
-            print " " + opt,
-            topts = opt.split(' ')
-            (oouterr, oret) = testBinary(origShell, testFile, topts , 0, verbose=self.options.verbose)
+            topts = []
+            if opt == None:
+              print " no options",
+            else:
+              print " " + opt,
+              topts = opt.split(' ')
+            (oouterr, oret) = testBinary(origShell, testFile, topts , 0, verbose=self.options.verbose, timeout=30)
             if (oret < 0):
               opts = topts
               break;
@@ -336,16 +418,20 @@ class BugMonitor:
         # Try running on tip now
         print "Testing bug on tip..."
         if self.options.guessopts:
-          guessopts = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', '']
+          guessopts = self.guessopts[reponame]
           for opt in guessopts:
-            print " " + opt,
-            tipOpts = opt.split(' ')
-            (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose)
+            tipOpts = []
+            if opt == None:
+              print " no options",
+            else:
+              print " " + opt,
+              tipOpts = opt.split(' ')
+            (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose, timeout=30)
             if (tret < 0):
               break;
         else:
           tipOpts = opts
-          (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose)
+          (touterr, tret) = testBinary(tipShell, testFile, tipOpts , 0, verbose=self.options.verbose, timeout=30)
       else:
         print ""
 
@@ -376,6 +462,8 @@ class BugMonitor:
       return None
 
   def extractRevision(self, text):
+      if (text == None):
+        return None
       tokens = text.split(' ')
       for token in tokens:
         if (re.match('^[a-f0-9]{12}[^a-f0-9]?', token)):
@@ -420,7 +508,7 @@ class BugMonitor:
         print "Compiling a new shell for tip (revision " + updRev + ")"
       else:
         print "Compiling a new shell for revision " + updRev
-      shell = makeShell(shellCacheDir, repoDir, archNum, compileType, valgrindSupport, updRev)
+      shell = makeShell(shellCacheDir, repoDir, archNum, compileType, valgrindSupport, updRev, True)
 
     return (shell, updRev)
 
