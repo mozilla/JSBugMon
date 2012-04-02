@@ -216,8 +216,6 @@ def cfgJsBin(archNum, compileType, threadsafe, configure, objdir):
                 cfgCmdList[counter] = cfgCmdList[counter].replace(os.sep, '\\\\')
             counter = counter + 1
 
-    print cfgCmdList
-    print cfgEnvList
     captureStdout(cfgCmdList, ignoreStderr=True, currWorkingDir=objdir, env=cfgEnvList)
 
 def shellName(archNum, compileType, extraID, vgSupport):
@@ -319,11 +317,6 @@ def makeShell(shellCacheDir, sourceDir, archNum, compileType, valgrindSupport, c
 # Run the testcase on the compiled js binary.
 def testBinary(shell, file, flagsRequired, valgSupport, verbose=False, timeout=None):
     testBinaryCmd = [shell] + flagsRequired + [file]
-
-    #if (timeout != None):
-    #  testBinaryCmd.insert(0, str(timeout));
-    #  testBinaryCmd.insert(0, "timeout");
-
     if valgSupport:
         valgPrefixCmd = []
         valgPrefixCmd.append('valgrind')
