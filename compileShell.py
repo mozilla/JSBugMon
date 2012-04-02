@@ -226,7 +226,7 @@ def shellName(archNum, compileType, extraID, vgSupport):
     ext = '.exe' if platform.system() == 'Windows' else ''
     return sname + ext
 
-def compileCopy(archNum, compileType, extraID, usePymake, repoDir, destDir, objDir, vgSupport):
+def compileCopy(archNum, compileType, extraID, usePymake, repoDir, destDir, objDir, vgSupport, verbose=False):
     '''
     This function compiles and copies a binary.
     '''
@@ -257,11 +257,13 @@ def compileCopy(archNum, compileType, extraID, usePymake, repoDir, destDir, objD
         if os.path.exists(compiledNamePath):
             print 'A shell was compiled even though there was a non-zero exit code. Continuing...'
         else:
-            print out
+            if verbose:
+              print out
             raise Exception("`make` did not result in a js shell, '" + repr(e) + "' thrown.")
 
     if not os.path.exists(compiledNamePath):
-        print out
+        if verbose:
+          print out
         raise Exception("`make` did not result in a js shell, no exception thrown.")
     else:
         newNamePath = normExpUserPath(
@@ -269,7 +271,7 @@ def compileCopy(archNum, compileType, extraID, usePymake, repoDir, destDir, objD
         shutil.copy2(compiledNamePath, newNamePath)
         return newNamePath
 
-def makeShell(shellCacheDir, sourceDir, archNum, compileType, valgrindSupport, currRev):
+def makeShell(shellCacheDir, sourceDir, archNum, compileType, valgrindSupport, currRev, verbose=False):
     tempDir = tempfile.mkdtemp(prefix="abc-" + currRev + "-")
     compileJsSrcPath = normExpUserPath(os.path.join(tempDir, 'compilePath', 'js', 'src'))
 
@@ -307,7 +309,7 @@ def makeShell(shellCacheDir, sourceDir, archNum, compileType, valgrindSupport, c
     # Only pymake was tested on Windows.
     usePymake = True if platform.system() == 'Windows' else False
     try:
-        shell = compileCopy(archNum, compileType, currRev, usePymake, sourceDir, shellCacheDir, objdir, valgrindSupport)
+        shell = compileCopy(archNum, compileType, currRev, usePymake, sourceDir, shellCacheDir, objdir, valgrindSupport, verbose)
     finally:
         assert os.path.isdir(tempDir) is True
         rmDirInclSubDirs(tempDir)
