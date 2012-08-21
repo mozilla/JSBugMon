@@ -23,6 +23,7 @@ import re
 import platform
 import subprocess
 import traceback
+import time
 
 from optparse import OptionParser
 
@@ -66,6 +67,12 @@ def parseOpts():
                       action='store_true',
                       default=False,
                       help='Attempt to confirm (or deny) open bugs. Defaults to "False"')
+
+    parser.add_option('-p', '--process',
+                      dest='process',
+                      action='store_true',
+                      default=False,
+                      help='Process commands on whiteboard of the bug. Defaults to "False"')
 
     parser.add_option('-U', '--update-bug',
                       dest='updatebug',
@@ -113,13 +120,19 @@ def main():
           bugmon.verifyFixedBug(bug_id, options.updatebug)
         elif options.confirm:
           bugmon.confirmOpenBug(bug_id, options.updatebug, options.updatebugpositive)
+        elif options.process:
+          bugmon.processCommand(bug_id)
         else:
           result = bugmon.reproduceBug(bug_id)
+      except BugException as b:
+        print "Cannot process bug: " + str(b)
       except Exception as e:
-        if options.verbose:
-          print "Caught exception: " + str(e)
-          print traceback.format_exc()
+        print "Caught exception: " + str(e)
+        print traceback.format_exc()
 
+
+class BugException(Exception):
+  pass
 
 class BugMonitorResult:
   # Different result states:
@@ -129,10 +142,13 @@ class BugMonitorResult:
   #  REPRODUCED_SWITCHED  - Reproduced on tip, but with a different crash/signal
   statusCodes = enum('FAILED', 'REPRODUCED_FIXED', 'REPRODUCED_TIP', 'REPRODUCED_SWITCHED')
 
-  def __init__(self, branchName, origRev, tipRev, status):
+  def __init__(self, branchName, origRev, tipRev, testFlags, testPath, arch, status):
     self.branchName = branchName
     self.origRev = origRev
     self.tipRev = tipRev
+    self.testFlags = testFlags
+    self.testPath = testPath
+    self.arch = arch
     self.status = status
 
 class BugMonitor:
@@ -148,10 +164,18 @@ class BugMonitor:
 
     self.guessopts = {}
     self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
-    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', '--ion -n', '--ion -n --ion-eager', None]
+    #self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', None, '--ion-eager']
+    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager']
 
     # Misc options
     self.options = options
+
+  def fetchBug(self, bug_id):
+    bug = self.bz.get_bug(bug_id)
+    if len(bug.depends_on) > 0:
+      if isinstance(bug.depends_on[0], str):
+        bug.depends_on = [ int("".join(bug.depends_on)) ]
+    return bug
 
   def postComment(self, bugnum, comment):
     url = urljoin(self.apiroot, 'bug/%s/comment?%s' % (bugnum, self.bz.qs()))
@@ -159,7 +183,7 @@ class BugMonitor:
 
   def verifyFixedBug(self, bugnum, updateBug):
     # Fetch the bug
-    bug = self.bz.get_bug(bugnum)
+    bug = self.fetchBug(bugnum)
 
     if (bug.status == "RESOLVED" and bug.resolution == "FIXED"):
       result = self.reproduceBug(bugnum)
@@ -167,13 +191,19 @@ class BugMonitor:
       if (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
         if updateBug:
           print "Marking bug " + str(bugnum) + " as verified fixed..."
+          while True:
+            try:
+              bug = self.fetchBug(bugnum)
+              # Mark VERIFIED FIXED now
+              bug.status = "VERIFIED"
+              bug.put()
+              break
+            except:
+              print "Failed to submit bug change, sleeping one second and retrying..."
+              time.sleep(1)
+
           # Add a comment
           self.postComment(bugnum, "JSBugMon: This bug has been automatically verified fixed.")
-          # Need to refetch the bug...
-          bug = self.bz.get_bug(bugnum)
-          # Mark VERIFIED FIXED now
-          bug.status = "VERIFIED"
-          bug.put()
         else:
           print "Would mark bug " + str(bugnum) + " as verified fixed..."
 
@@ -181,7 +211,7 @@ class BugMonitor:
 
   def confirmOpenBug(self, bugnum, updateBug, updateBugPositive):
     # Fetch the bug
-    bug = self.bz.get_bug(bugnum)
+    bug = self.fetchBug(bugnum)
 
     if (bug.status != "RESOLVED" and bug.status != "VERIFIED"):
       bugUpdateRequested = False
@@ -212,11 +242,13 @@ class BugMonitor:
 
       result = self.reproduceBug(bugnum)
 
+      comments = []
+
       if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
         if updateBugPositive or bugConfirmRequested:
           print "Marking bug " + str(bugnum) + " as confirmed on tip..."
           # Add a comment
-          self.postComment(bugnum, "JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
+          comments.append("JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
           bugUpdated = True
         else:
           print "Would mark bug " + str(bugnum) + " as confirmed on tip..."
@@ -224,7 +256,7 @@ class BugMonitor:
         if updateBug or bugUpdateRequested:
           print "Marking bug " + str(bugnum) + " as non-reproducing on tip..."
           # Add a comment
-          self.postComment(bugnum, "JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
+          comments.append("JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
           bugUpdated = True
 
           # Close bug only if requested to do so
@@ -233,35 +265,265 @@ class BugMonitor:
           print "Would mark bug " + str(bugnum) + " as non-reproducing on tip..."
 
       if bugUpdated:
-        # Fetch the bug again for updating
-        bug = self.bz.get_bug(bugnum)
-
-        # We add "ignore" to our bugmon options so we don't update the bug a second time
         wbOpts.append('ignore')
         wbParts = filter(lambda x: len(x) > 0, map(str.rstrip, map(str.lstrip, re.split('\[jsbugmon:[^\]]+\]', bug.whiteboard))))
         wbParts.append("[jsbugmon:" + ",".join(wbOpts) + "]")
-        bug.whiteboard = " ".join(wbParts)
+
+        while True:
+          try:
+            # Fetch the bug again for updating
+            bug = self.fetchBug(bugnum)
+
+            # We add "ignore" to our bugmon options so we don't update the bug a second time
+            bug.whiteboard = " ".join(wbParts)
+
+            # Mark bug as WORKSFORME if confirmed to no longer reproduce
+            if closeBug:
+              bug.status = "RESOLVED"
+              bug.resolution = "WORKSFORME"
+
+            bug.put()
+            break
+          except:
+            print "Failed to submit bug change, sleeping one second and retrying..."
+            time.sleep(1)
+
+      if (len(comments) > 0):
+        comment = "\n".join(comments)
+        print "Posting comment: "
+        print comment
+        print ""
+        self.postComment(bugnum, comment)
+
+    return
+
+  def processCommand(self, bugnum):
+    # Fetch the bug
+    bug = self.fetchBug(bugnum)
+
+    bugUpdateRequested = False
+    bugConfirmRequested = False
+    bugCloseRequested = False
+    bugVerifyRequested = False
+    bugBisectRequested = False
+    bugBisectFixRequested = False
+    bugUpdated = False
+
+    closeBug = False
+    verifyBug = False
+
+    wbOpts = []
+    if (bug.whiteboard != None):
+      ret = re.compile('\[jsbugmon:([^\]]+)\]').search(bug.whiteboard)
+      if (ret != None and ret.groups > 1):
+        wbOpts = ret.group(1).split(",")
+
+      # Explicitly marked to ignore this bug
+      if ('ignore' in wbOpts):
+        return
+
+      if ('update' in wbOpts):
+        bugUpdateRequested = True
+
+      if ('reconfirm' in wbOpts):
+        bugConfirmRequested = True
+
+      if ('close' in wbOpts):
+        bugCloseRequested = True
+
+      if ('verify' in wbOpts):
+        bugVerifyRequested = True
+
+      if ('bisect' in wbOpts):
+        bugBisectRequested = True
+
+      if ('bisectfix' in wbOpts):
+        bugBisectFixRequested = True
+        
+      print wbOpts
+
+      comments = []
+
+      # Keep bisect comments separate so we can remove bisect/bisectfix commands separately
+      bisectComments = []
+      bisectFixComments = []
+
+      result = None
+
+      for opt in wbOpts:
+        if (opt.find("=") > 0):
+          (cmd,param) = opt.split('=')
+          if (cmd != None and param != None):
+            if (cmd == "verify-branch"):
+              branches = param.split(';');
+              for branch in branches:
+                print "Branch " + branch
+                branchResult = self.reproduceBug(bugnum, branch)
+                if (branchResult.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
+                  print "Marking bug " + str(bugnum) + " as reproducing on branch " + branch + " ..."
+                  # Add a comment
+                  comments.append("JSBugMon: This bug has been automatically confirmed to be still valid on branch " + branch + "  (reproduced on revision " + branchResult.tipRev + ").")
+                elif (branchResult.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+                  print "Marking bug " + str(bugnum) + " as non-reproducing on branch " + branch + " ..."
+                  comments.append("JSBugMon: The testcase found in this bug does not reproduce on branch " + branch + " (tried revision " + branchResult.tipRev + ").")
+                else:
+                  print "Marking bug " + str(bugnum) + " as not processable ..."
+                  comments.append("JSBugMon: Command failed during processing this bug: " + opt + " (branch " + branch + ")")
+
+      if bugVerifyRequested: 
+        if bug.status == "RESOLVED":
+          if result == None:
+            result = self.reproduceBug(bugnum)
+          if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
+            print "Marking bug " + str(bugnum) + " as cannot verify fixed..."
+            # Add a comment
+            comments.append("JSBugMon: Cannot confirm fix, issue is still valid. (tried revision " + result.tipRev + ").")
+          elif (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+            print "Marking bug " + str(bugnum) + " as verified fixed..."
+            comments.append("JSBugMon: This bug has been automatically verified fixed. (tried revision " + result.tipRev + ").")
+            verifyBug = True
+          else:
+            print "Marking bug " + str(bugnum) + " as not processable ..."
+            comments.append("JSBugMon: Command failed during processing this bug: verify")
+
+      if bugUpdateRequested:
+        if bug.status != "RESOLVED" and bug.status != "VERIFIED":
+          if result == None:
+            result = self.reproduceBug(bugnum)
+          if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
+            if bugConfirmRequested:
+              print "Marking bug " + str(bugnum) + " as confirmed on tip..."
+              # Add a comment
+              comments.append("JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
+          
+          elif (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+            print "Marking bug " + str(bugnum) + " as non-reproducing on tip..."
+            # Add a comment
+            comments.append("JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
+            if bugCloseRequested:
+              closeBug = True
+
+      if bugBisectRequested and bug.status != "RESOLVED" and bug.status != "VERIFIED":
+        if result == None:
+          result = self.reproduceBug(bugnum)
+        if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
+          print "Bisecting bug " +  str(bugnum) + " ..."
+          bisectComment = self.bisectBug(bugnum, result)
+          print bisectComment
+          if len(bisectComment) > 0:
+            bisectComments.append("JSBugMon: Bisection requested, result:")
+            bisectComments.extend(bisectComment)
+          else:
+            bisectComments.append("JSBugMon: Bisection requested, failed due to error (try manually).")
+            bisectComments.append("");
+
+      if bugBisectFixRequested:
+        if result == None:
+          result = self.reproduceBug(bugnum)
+        if (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+          print "Bisecting fix for bug " +  str(bugnum) + " ..."
+          bisectComment = self.bisectBug(bugnum, result, True)
+          print bisectComment
+          if len(bisectComment) > 0:
+            bisectFixComments.append("JSBugMon: Fix Bisection requested, result:")
+            bisectFixComments.extend(bisectComment)
+          else:
+            bisectFixComments.append("JSBugMon: Fix Bisection requested, failed due to error (try manually).")
+            bisectFixComments.append("");
+
+      wbParts = []
+      whiteBoardModified = False
+      if closeBug or verifyBug or len(comments) > 0:
+        whiteBoardModified = True
+        wbOpts.append('ignore')
+
+      if bugBisectRequested:
+        whiteBoardModified = True
+        wbOpts.remove('bisect')
+        comments.extend(bisectComments)
+
+      if bugBisectFixRequested and len(bisectFixComments) > 0:
+        whiteBoardModified = True
+        wbOpts.remove('bisectfix')
+        comments.extend(bisectFixComments)
+
+      if whiteBoardModified:
+        wbParts = filter(lambda x: len(x) > 0, map(str.rstrip, map(str.lstrip, re.split('\[jsbugmon:[^\]]+\]', bug.whiteboard))))
+        wbParts.append("[jsbugmon:" + ",".join(wbOpts) + "]")
+
+      while True:
+        # Fetch the bug again
+        bug = self.fetchBug(bugnum)
 
         # Mark bug as WORKSFORME if confirmed to no longer reproduce
         if closeBug:
           bug.status = "RESOLVED"
           bug.resolution = "WORKSFORME"
 
-        bug.put()
+        # Mark bug as VERIFIED if we verified it successfully
+        if verifyBug:
+          bug.status = "VERIFIED"
 
+        if whiteBoardModified:
+          # We add "ignore" to our bugmon options so we don't update the bug a second time
+          bug.whiteboard = " ".join(wbParts)
+        
+        try:
+          bug.put()
+          break
+        except Exception as e:
+          print "Caught exception: " + str(e)
+          print traceback.format_exc()
+          time.sleep(1)
+        except:
+          print "Failed to submit bug change, sleeping one second and retrying..."
+          time.sleep(1)
+
+      if (len(comments) > 0):
+        comment = "\n".join(comments)
+        print "Posting comment: "
+        print comment
+        print ""
+        self.postComment(bugnum, comment)
 
     return
 
+  def bisectBug(self, bugnum, reproductionResult, bisectForFix=False):
+    # By default, bisect for the regressing changeset
+    revFlag = '-e'
+    if bisectForFix:
+      revFlag = '-s'
 
-  def reproduceBug(self, bugnum):
+    cmd = [ 'python', '/home/decoder/LangFuzz/fuzzing/autobisect-js/autoBisect.py', '-d', os.path.join(self.repoBase, reproductionResult.branchName), '-p', '-a', reproductionResult.arch, revFlag, reproductionResult.origRev, '--flags', ",".join(reproductionResult.testFlags), '-i', reproductionResult.testPath, 'crashes', '10' ]
+    outLines = subprocess.check_output(cmd).split("\n");
+    retLines = []
+    found = False
+    for outLine in outLines:
+      if not found and (outLine.find("autoBisect shows this is probably related") != -1 or outLine.find("Due to skipped revisions") != -1):
+        found = True
+
+      if found:
+        # Remove possible email address
+        if outLine.find("user:") != -1:
+          outLine = re.sub("\s*<.+>", "", outLine)
+
+        # autobisect emits a date at the end, skip that
+        if (re.match("^\w+:", outLine) == None) and re.search("\s+\d{1,2}:\d{1,2}:\d{1,2}\s+", outLine) != None:
+          continue
+
+        retLines.append(outLine)
+
+    return retLines
+
+  def reproduceBug(self, bugnum, tipBranch=None):
     # Fetch the bug
-    bug = self.bz.get_bug(bugnum)
+    bug = self.fetchBug(bugnum)
 
     # Look for the first comment
     comment = bug.comments[0] if len(bug.comments) > 0 else None
 
     if (comment == None):
-      raise Exception("Error: Specified bug does not have any comments")
+      raise BugException("Error: Specified bug does not have any comments")
 
     text = comment.text
 
@@ -269,7 +531,7 @@ class BugMonitor:
     rev = self.extractRevision(text)
 
     if (rev == None):
-      raise Exception("Error: Failed to isolate original revision for test")
+      raise BugException("Error: Failed to isolate original revision for test")
 
     opts = None
     tipOpts = None
@@ -290,16 +552,22 @@ class BugMonitor:
       arch = "64"
       archList = [ "64", "32" ] # TODO: Detect native platform here
     else:
-      raise Exception("Error: Unsupported architecture \"" + bug.platform + "\" required by bug")
+      raise BugException("Error: Unsupported architecture \"" + bug.platform + "\" required by bug")
 
     if (bug.version == "Trunk"):
       reponame = "mozilla-central"
     elif (bug.version == "Other Branch"):
       reponame = "ionmonkey"
     else:
-      raise Exception("Error: Unsupported branch \"" + bug.version + "\" required by bug")
+      raise BugException("Error: Unsupported branch \"" + bug.version + "\" required by bug")
 
+    if (tipBranch == None):
+      tipBranch = reponame
+
+    print "Repobase: " + self.repoBase
+    print "Reponame: " + reponame
     repoDir = os.path.join(self.repoBase, reponame)
+    tipRepoDir = os.path.join(self.repoBase, tipBranch)
 
     # We need at least some shell to extract the test from the bug, 
     # so we build a debug tip shell here already
@@ -356,9 +624,34 @@ class BugMonitor:
           break
         cnt += 1
       if not found:
-        # Ensure we don't cache the wrong test
-        os.remove(testFile)
-        raise Exception("Error: Failed to isolate test from comment")
+        # First try to find a suitable attachment
+        attachments = [a for a in bug.attachments if not bool(int(a.is_obsolete))]
+        for attachment in attachments:
+          # Seriously, we don't need anything larger than 512kb here^^
+          if (attachment.size <= 512*1024):
+            # Refetch attachment with content
+            url = urljoin(self.apiroot, 'attachment/%s/?%s&attachmentdata=1' % (attachment.id, self.bz.qs()))
+            attachment = attachment.get(url)
+
+            try:
+              rawData = base64.b64decode(attachment.data)
+              # Write our data to file
+              outFile = open(testFile, "w")
+              outFile.write(rawData)
+              outFile.close()
+              (err, ret) = testBinary(tipShell, testFile, [], 0, timeout=30)
+              if (err.find("SyntaxError") < 0):
+                # Found something that looks like JS :)
+                found = True
+                break
+            except TypeError:
+              pass
+
+        # If we still haven't found any test, give up here...
+        if not found:
+          # Ensure we don't cache the wrong test
+          os.remove(testFile)
+          raise BugException("Error: Failed to isolate test from comment")
 
     (oouterr, oret) = (None, None)
     (origShell, origRev) = (None, None)
@@ -371,12 +664,12 @@ class BugMonitor:
       for archType in archList:
         # Update to tip and cache result:
         updated = False
-        if not self.tipRev.has_key(repoDir):
+        if not self.tipRev.has_key(tipRepoDir):
           # If we don't know the tip revision for this branch, update and get it
-          self.tipRev[repoDir] = self.hgUpdate(repoDir)
+          self.tipRev[tipRepoDir] = self.hgUpdate(tipRepoDir)
           updated = True
       
-        (tipShell, tipRev) = self.getShell("cache/", archType, compileType, 0, self.tipRev[repoDir], updated, repoDir)
+        (tipShell, tipRev) = self.getShell("cache/", archType, compileType, 0, self.tipRev[tipRepoDir], updated, tipRepoDir)
         (origShell, origRev) = self.getShell("cache/", archType, compileType, 0, rev, False, repoDir)
 
 
@@ -400,6 +693,8 @@ class BugMonitor:
         # If we reproduced with one arch, then we don't need to try the others
         if (oret < 0):
           break;
+
+        print ""
 
       # If we reproduced with dbg, then we don't need to try opt
       if (oret < 0):
@@ -439,20 +734,20 @@ class BugMonitor:
         if (tret == oret):
           if (opts == tipOpts):
             print "Result: Bug still reproduces"
-            return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_TIP)
+            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
           else:
             print "Result: Bug still reproduces, but with different options: " + " ".join(tipOpts) # TODO need another code here in the future
-            return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_TIP)
+            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
         else:
           # Unlikely but possible, switched signal
           print "Result: Bug now reproduces with signal " + str(tret) + " (previously " + str(oret) + ")"
-          return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_SWITCHED)
+          return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_SWITCHED)
       else:
         print "Result: Bug no longer reproduces"
-        return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.REPRODUCED_FIXED)
+        return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_FIXED)
     else:
       print "Error: Failed to reproduce bug on original revision"
-      return BugMonitorResult(reponame, rev, self.tipRev[repoDir], BugMonitorResult.statusCodes.FAILED)
+      return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.FAILED)
 
   def extractOptions(self, text):
       ret = re.compile('((?: \-[a-z])+)', re.DOTALL).search(text)
