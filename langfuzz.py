@@ -17,6 +17,7 @@
 
 import sys
 import os
+import subprocess
 
 from bugzilla.agents import BMOAgent
 from bugzilla.utils import get_credentials
@@ -55,3 +56,6 @@ for bug in buglist:
 
 # Print command
 print " ".join(cmd)
+
+# Run command
+sys.exit(subprocess.call(cmd))

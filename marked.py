@@ -17,6 +17,7 @@
 
 import sys
 import os
+import subprocess
 
 from bugzilla.agents import BMOAgent
 from bugzilla.utils import get_credentials
@@ -40,17 +41,25 @@ options = {
 # Get the bugs from the api
 buglist = bmo.get_bug_list(options)
 
-print "Found %s bugs" % (len(buglist))
+if len(buglist) == 0:
+  print "No bugs found."
+  sys.exit(0)
+
+print "Found %s bugs:" % (len(buglist))
 
 # Basic arguments
-cmd = ['python', os.path.join(sys.path[0], 'bugmon.py'), '-r', os.path.join(sys.path[0], 'repos/'), "-C", "-G" ]
+cmd = ['python', os.path.join(sys.path[0], 'bugmon.py'), '-r', os.path.join(sys.path[0], 'repos/'), "-p", "-G" ]
 
 # Propagate all extra arguments
 cmd.extend(sys.argv[1:])
 
 # Append bug numbers
 for bug in buglist:
+    print bug
     cmd.append(str(bug.id))
 
 # Print command
 print " ".join(cmd)
+
+# Run command
+sys.exit(subprocess.call(cmd))
