@@ -123,7 +123,8 @@ def main():
         elif options.process:
           bugmon.processCommand(bug_id)
         else:
-          result = bugmon.reproduceBug(bug_id)
+          raise "Unsupported action requested"
+          #result = bugmon.reproduceBug(bug_id)
       except BugException as b:
         print "Cannot process bug: " + str(b)
       except Exception as e:
@@ -142,13 +143,14 @@ class BugMonitorResult:
   #  REPRODUCED_SWITCHED  - Reproduced on tip, but with a different crash/signal
   statusCodes = enum('FAILED', 'REPRODUCED_FIXED', 'REPRODUCED_TIP', 'REPRODUCED_SWITCHED')
 
-  def __init__(self, branchName, origRev, tipRev, testFlags, testPath, arch, status):
+  def __init__(self, branchName, origRev, tipRev, testFlags, testPath, arch, ctype, status):
     self.branchName = branchName
     self.origRev = origRev
     self.tipRev = tipRev
     self.testFlags = testFlags
     self.testPath = testPath
     self.arch = arch
+    self.ctype = ctype
     self.status = status
 
 class BugMonitor:
@@ -163,9 +165,10 @@ class BugMonitor:
     self.tipRev = {}
 
     self.guessopts = {}
-    self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
+    #self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
     #self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', None, '--ion-eager']
-    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager']
+    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m -a', '--ion -n -m --ion-eager', '--ion -n -m --ion-eager -a' ]
+    self.guessopts['mozilla-central'] = [None, '--ion-eager', '-m --ion-eager', '-m -a --ion-eager', '--no-ion', '-a', '-a --no-ion', '-a --no-ti', '-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a']
 
     # Misc options
     self.options = options
@@ -175,6 +178,10 @@ class BugMonitor:
     if len(bug.depends_on) > 0:
       if isinstance(bug.depends_on[0], str):
         bug.depends_on = [ int("".join(bug.depends_on)) ]
+
+    if bug.cf_crash_signature != None:
+      bug.cf_crash_signature = bug.cf_crash_signature.replace("\r\n", "\n")
+
     return bug
 
   def postComment(self, bugnum, comment):
@@ -186,7 +193,7 @@ class BugMonitor:
     bug = self.fetchBug(bugnum)
 
     if (bug.status == "RESOLVED" and bug.resolution == "FIXED"):
-      result = self.reproduceBug(bugnum)
+      result = self.reproduceBug(bug)
 
       if (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
         if updateBug:
@@ -240,7 +247,7 @@ class BugMonitor:
       if ('close' in wbOpts):
         bugCloseRequested = True
 
-      result = self.reproduceBug(bugnum)
+      result = self.reproduceBug(bug)
 
       comments = []
 
@@ -358,7 +365,7 @@ class BugMonitor:
               branches = param.split(';');
               for branch in branches:
                 print "Branch " + branch
-                branchResult = self.reproduceBug(bugnum, branch)
+                branchResult = self.reproduceBug(bug, branch)
                 if (branchResult.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
                   print "Marking bug " + str(bugnum) + " as reproducing on branch " + branch + " ..."
                   # Add a comment
@@ -373,7 +380,7 @@ class BugMonitor:
       if bugVerifyRequested: 
         if bug.status == "RESOLVED":
           if result == None:
-            result = self.reproduceBug(bugnum)
+            result = self.reproduceBug(bug)
           if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
             print "Marking bug " + str(bugnum) + " as cannot verify fixed..."
             # Add a comment
@@ -389,7 +396,7 @@ class BugMonitor:
       if bugUpdateRequested:
         if bug.status != "RESOLVED" and bug.status != "VERIFIED":
           if result == None:
-            result = self.reproduceBug(bugnum)
+            result = self.reproduceBug(bug)
           if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
             if bugConfirmRequested:
               print "Marking bug " + str(bugnum) + " as confirmed on tip..."
@@ -405,8 +412,8 @@ class BugMonitor:
 
       if bugBisectRequested and bug.status != "RESOLVED" and bug.status != "VERIFIED":
         if result == None:
-          result = self.reproduceBug(bugnum)
-        if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
+          result = self.reproduceBug(bug)
+        if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP or result.status == BugMonitorResult.statusCodes.REPRODUCED_SWITCHED or BugMonitorResult.statusCodes.REPRODUCED_FIXED):
           print "Bisecting bug " +  str(bugnum) + " ..."
           bisectComment = self.bisectBug(bugnum, result)
           print bisectComment
@@ -419,7 +426,7 @@ class BugMonitor:
 
       if bugBisectFixRequested:
         if result == None:
-          result = self.reproduceBug(bugnum)
+          result = self.reproduceBug(bug)
         if (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
           print "Bisecting fix for bug " +  str(bugnum) + " ..."
           bisectComment = self.bisectBug(bugnum, result, True)
@@ -455,21 +462,27 @@ class BugMonitor:
         # Fetch the bug again
         bug = self.fetchBug(bugnum)
 
+        bugModified = False
+
         # Mark bug as WORKSFORME if confirmed to no longer reproduce
         if closeBug:
+          bugModified = True
           bug.status = "RESOLVED"
           bug.resolution = "WORKSFORME"
 
         # Mark bug as VERIFIED if we verified it successfully
         if verifyBug:
+          bugModified = True
           bug.status = "VERIFIED"
 
         if whiteBoardModified:
           # We add "ignore" to our bugmon options so we don't update the bug a second time
+          bugModified = True
           bug.whiteboard = " ".join(wbParts)
         
         try:
-          bug.put()
+          if bugModified:
+            bug.put()
           break
         except Exception as e:
           print "Caught exception: " + str(e)
@@ -494,7 +507,7 @@ class BugMonitor:
     if bisectForFix:
       revFlag = '-s'
 
-    cmd = [ 'python', '/home/decoder/LangFuzz/fuzzing/autobisect-js/autoBisect.py', '-d', os.path.join(self.repoBase, reproductionResult.branchName), '-p', '-a', reproductionResult.arch, revFlag, reproductionResult.origRev, '--flags', ",".join(reproductionResult.testFlags), '-i', reproductionResult.testPath, 'crashes', '10' ]
+    cmd = [ 'python', '/home/decoder/LangFuzz/fuzzing/autobisect-js/autoBisect.py', '-R', os.path.join(self.repoBase, reproductionResult.branchName), '-a', reproductionResult.arch, '-c', reproductionResult.ctype, revFlag, reproductionResult.origRev, '-p', " ".join(reproductionResult.testFlags) + " " + reproductionResult.testPath, '-i', 'crashes', '--timeout=10' ]
     outLines = subprocess.check_output(cmd).split("\n");
     retLines = []
     found = False
@@ -515,12 +528,30 @@ class BugMonitor:
 
     return retLines
 
-  def reproduceBug(self, bugnum, tipBranch=None):
+  def reproduceBug(self, bug, tipBranch=None):
     # Fetch the bug
-    bug = self.fetchBug(bugnum)
+    #bug = self.fetchBug(bugnum)
+    bugnum = str(bug.id)
+
+    # Determine comment to look at and revision
+    testCommentIdx = 0
+    rev = None
+
+    if (bug.whiteboard != None):
+      ret = re.compile('\[jsbugmon:([^\]]+)\]').search(bug.whiteboard)
+      if (ret != None and ret.groups > 1):
+        wbOpts = ret.group(1).split(",")
+        for opt in wbOpts:
+          if (opt.find("=") > 0):
+            (cmd,param) = opt.split('=')
+            if (cmd != None and param != None):
+              if (cmd == "origRev"):
+                rev = param
+              elif (cmd == "testComment" and param.isdigit()):
+                testCommentIdx = int(param)
 
     # Look for the first comment
-    comment = bug.comments[0] if len(bug.comments) > 0 else None
+    comment = bug.comments[testCommentIdx] if len(bug.comments) > testCommentIdx else None
 
     if (comment == None):
       raise BugException("Error: Specified bug does not have any comments")
@@ -528,7 +559,11 @@ class BugMonitor:
     text = comment.text
 
     # Isolate revision to test for
-    rev = self.extractRevision(text)
+    if (rev == None):
+      rev = self.extractRevision(text)
+    else:
+      # Sanity check of the revision
+      rev = self.extractRevision(rev)
 
     if (rev == None):
       raise BugException("Error: Failed to isolate original revision for test")
@@ -579,7 +614,10 @@ class BugMonitor:
     (tipShell, tipRev) = self.getShell("cache/", arch, "dbg", 0, self.tipRev[repoDir], updated, repoDir)
 
     # If the file already exists, then we can reuse it
-    testFile = "bug" + str(bugnum) + ".js"
+    if testCommentIdx > 0:
+      testFile = "bug" + str(bugnum) + "-" + str(testCommentIdx) + ".js"
+    else:
+      testFile = "bug" + str(bugnum) + ".js"
 
     if (os.path.exists(testFile)):
       print "Using existing (cached) testfile " + testFile
@@ -734,20 +772,20 @@ class BugMonitor:
         if (tret == oret):
           if (opts == tipOpts):
             print "Result: Bug still reproduces"
-            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
+            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, compileType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
           else:
             print "Result: Bug still reproduces, but with different options: " + " ".join(tipOpts) # TODO need another code here in the future
-            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
+            return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, compileType, BugMonitorResult.statusCodes.REPRODUCED_TIP)
         else:
           # Unlikely but possible, switched signal
           print "Result: Bug now reproduces with signal " + str(tret) + " (previously " + str(oret) + ")"
-          return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_SWITCHED)
+          return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, compileType, BugMonitorResult.statusCodes.REPRODUCED_SWITCHED)
       else:
         print "Result: Bug no longer reproduces"
-        return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.REPRODUCED_FIXED)
+        return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, compileType, BugMonitorResult.statusCodes.REPRODUCED_FIXED)
     else:
       print "Error: Failed to reproduce bug on original revision"
-      return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, BugMonitorResult.statusCodes.FAILED)
+      return BugMonitorResult(reponame, rev, self.tipRev[tipRepoDir], opts, testFile, archType, compileType, BugMonitorResult.statusCodes.FAILED)
 
   def extractOptions(self, text):
       ret = re.compile('((?: \-[a-z])+)', re.DOTALL).search(text)
