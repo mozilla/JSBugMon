@@ -180,6 +180,7 @@ def cfgJsBin(archNum, compileType, threadsafe, configure, objdir):
         cfgCmdList.append('--disable-optimize')
         cfgCmdList.append('--enable-debug')
     elif compileType == 'opt':
+        cfgCmdList.append('--enable-gczeal')
         cfgCmdList.append('--enable-optimize')
         cfgCmdList.append('--disable-debug')
         cfgCmdList.append('--enable-profiling')  # needed to obtain backtraces on opt shells
@@ -187,7 +188,7 @@ def cfgJsBin(archNum, compileType, threadsafe, configure, objdir):
     cfgCmdList.append('--enable-methodjit')  # Enabled by default now, but useful for autoBisect
     cfgCmdList.append('--enable-type-inference') # Enabled by default now, but useful for autoBisect
     # Fuzzing tweaks for more useful output, implemented in bug 706433
-    cfgCmdList.append('--enable-more-deterministic')
+    #cfgCmdList.append('--enable-more-deterministic')
     cfgCmdList.append('--disable-tests')
 
     if os.name != 'nt':
