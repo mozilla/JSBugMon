@@ -175,7 +175,7 @@ class BugMonitor:
 
   def fetchBug(self, bug_id):
     bug = self.bz.get_bug(bug_id)
-    if len(bug.depends_on) > 0:
+    if bug.depends_on != None and len(bug.depends_on) > 0:
       if isinstance(bug.depends_on[0], str):
         bug.depends_on = [ int("".join(bug.depends_on)) ]
 
@@ -314,6 +314,7 @@ class BugMonitor:
     bugVerifyRequested = False
     bugBisectRequested = False
     bugBisectFixRequested = False
+    bugFailureMsg = None
     bugUpdated = False
 
     closeBug = False
@@ -364,6 +365,8 @@ class BugMonitor:
             if (cmd == "verify-branch"):
               branches = param.split(';');
               for branch in branches:
+                if not branch in ['mozilla-aurora', 'mozilla-beta', 'mozilla-release', 'mozilla-esr17']:
+                  continue
                 print "Branch " + branch
                 branchResult = self.reproduceBug(bug, branch)
                 if (branchResult.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
@@ -396,19 +399,33 @@ class BugMonitor:
       if bugUpdateRequested:
         if bug.status != "RESOLVED" and bug.status != "VERIFIED":
           if result == None:
-            result = self.reproduceBug(bug)
-          if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP):
-            if bugConfirmRequested:
-              print "Marking bug " + str(bugnum) + " as confirmed on tip..."
+            try:
+              result = self.reproduceBug(bug)
+            except BugException as b:
+              bugFailureMsg = "Cannot process bug: " + str(b)
+            except Exception as e:
+              bugFailureMsg = "Cannot process bug: Unknown exception (check manually)"
+              print "Caught exception: " + str(e)
+              print traceback.format_exc()
+
+          if result != None:
+            if (result.status == BugMonitorResult.statusCodes.REPRODUCED_TIP or result.status == BugMonitorResult.statusCodes.REPRODUCED_SWITCHED):
+              bugReproduced = True
+              if bugConfirmRequested:
+                print "Marking bug " + str(bugnum) + " as confirmed on tip..."
+                # Add a comment
+                comments.append("JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
+            
+            elif (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
+              print "Marking bug " + str(bugnum) + " as non-reproducing on tip..."
               # Add a comment
-              comments.append("JSBugMon: This bug has been automatically confirmed to be still valid (reproduced on revision " + result.tipRev + ").")
-          
-          elif (result.status == BugMonitorResult.statusCodes.REPRODUCED_FIXED):
-            print "Marking bug " + str(bugnum) + " as non-reproducing on tip..."
-            # Add a comment
-            comments.append("JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
-            if bugCloseRequested:
-              closeBug = True
+              comments.append("JSBugMon: The testcase found in this bug no longer reproduces (tried revision " + result.tipRev + ").")
+              if bugCloseRequested:
+                closeBug = True
+
+            elif (result.status == BugMonitorResult.statusCodes.FAILED):
+              bugFailureMsg = "Cannot process bug: Unable to reproduce bug on original revision."
+              
 
       if bugBisectRequested and bug.status != "RESOLVED" and bug.status != "VERIFIED":
         if result == None:
@@ -453,6 +470,11 @@ class BugMonitor:
         whiteBoardModified = True
         wbOpts.remove('bisectfix')
         comments.extend(bisectFixComments)
+
+      if bugFailureMsg != None and bugUpdateRequested:
+        whiteBoardModified = True
+        wbOpts.remove('update')
+        comments.append(bugFailureMsg)
 
       if whiteBoardModified:
         wbParts = filter(lambda x: len(x) > 0, map(str.rstrip, map(str.lstrip, re.split('\[jsbugmon:[^\]]+\]', bug.whiteboard))))
@@ -507,7 +529,7 @@ class BugMonitor:
     if bisectForFix:
       revFlag = '-s'
 
-    cmd = [ 'python', '/home/decoder/LangFuzz/fuzzing/autobisect-js/autoBisect.py', '-R', os.path.join(self.repoBase, reproductionResult.branchName), '-a', reproductionResult.arch, '-c', reproductionResult.ctype, revFlag, reproductionResult.origRev, '-p', " ".join(reproductionResult.testFlags) + " " + reproductionResult.testPath, '-i', 'crashes', '--timeout=10' ]
+    cmd = [ 'python', '/srv/repos/fuzzing/autobisect-js/autoBisect.py', '-R', os.path.join(self.repoBase, reproductionResult.branchName), '-a', reproductionResult.arch, '-c', reproductionResult.ctype, revFlag, reproductionResult.origRev, '-p', " ".join(reproductionResult.testFlags) + " " + reproductionResult.testPath, '-i', 'crashes', '--timeout=10' ]
     outLines = subprocess.check_output(cmd).split("\n");
     retLines = []
     found = False
