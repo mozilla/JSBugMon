@@ -168,7 +168,7 @@ class BugMonitor:
     #self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
     #self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', None, '--ion-eager']
     self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m -a', '--ion -n -m --ion-eager', '--ion -n -m --ion-eager -a' ]
-    self.guessopts['mozilla-central'] = [None, '--ion-eager', '-m --ion-eager', '-m -a --ion-eager', '--no-ion', '-a', '-a --no-ion', '-a --no-ti', '-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a']
+    self.guessopts['mozilla-central'] = [None, '--ion-eager', '-m --ion-eager', '-m -a --ion-eager', '--no-ion', '-a', '-a --no-ion', '-a --no-ti', '--no-jm', '-a --no-jm', '-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a']
 
     # Misc options
     self.options = options
@@ -402,9 +402,9 @@ class BugMonitor:
             try:
               result = self.reproduceBug(bug)
             except BugException as b:
-              bugFailureMsg = "Cannot process bug: " + str(b)
+              bugFailureMsg = "JSBugMon: Cannot process bug: " + str(b)
             except Exception as e:
-              bugFailureMsg = "Cannot process bug: Unknown exception (check manually)"
+              bugFailureMsg = "JSBugMon: Cannot process bug: Unknown exception (check manually)"
               print "Caught exception: " + str(e)
               print traceback.format_exc()
 
@@ -424,7 +424,7 @@ class BugMonitor:
                 closeBug = True
 
             elif (result.status == BugMonitorResult.statusCodes.FAILED):
-              bugFailureMsg = "Cannot process bug: Unable to reproduce bug on original revision."
+              bugFailureMsg = "JSBugMon: Cannot process bug: Unable to automatically reproduce, please track manually."
               
 
       if bugBisectRequested and bug.status != "RESOLVED" and bug.status != "VERIFIED":
