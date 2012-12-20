@@ -1,0 +1,40 @@
+== What JSBugMon is ==
+
+JSBugMon is a tool for automated tracking of JavaScript engine bug reports in Mozilla's Bugzilla database. It is capable of automatically extracting tests from bug reports that crash or assert. It is also able to extract the affected revision, guess required runtime options and architecture and determine what build type is required to reproduce.
+
+== What JSBugMon needs to track a bug ==
+
+In order to track a bug, JSBugMon must first be able to find a working test (that crashes or asserts). The test can be an attachment to the bug or be part of the first comment (comment 0), even if the comment includes other text that does not belong to the test. The second requirement is an HG revision specified in comment 0.
+
+Using this data, JSBugMon will try to build a JS shell with the specified HG revision and try to reproduce the problem using the given test. It try different build types, runtime options and architectures, but will prefer the architecture specified in the bug. If tracking for a bug was requested, but JSBugMon was not able to reproduce/track the bug, it will state this in the bug comments.
+
+== How JSBugMon can be used ==
+
+While Mozilla's JSBugMon instance performs several tasks on its own and fully automatic (e.g. verification of fixed security bugs), most interaction needs to be explicitly requested using the whiteboard. Commands for JSBugMon are added in the whiteboard with a special tag that looks like this:
+
+[jsbugmon:cmd1,cmd2,cmd3...]
+
+
+Valid commands are:
+
+update - The most basic command, it requests tracking for the bug. JSBugMon will first attempt to reproduce the bug. If reproduction fails, it will comment and unset the update flag. If reproduction succeeds, it will remain quiet and comment once the bug no longer reproduces.
+
+reconfirm - Only valid together with the update command. It will perform the same steps as for tracking, but even on successful reproduction, it will comment in the bug. After doing so, it will ignore the bug (by setting the ignore flag, see below) until otherwise requested.
+
+ignore - JSBugMon will ignore any bug that has this command in it, regardless of other commands. JSBugMon also sets this flag automatically after certain commands.
+
+bisect - This command will cause JSBugMon to perform a bisection to find the regressing changeset (the changeset that introduced the bug).
+
+bisectfix - This command will cause JSBugMon to perform a bisection to find the fixing changeset in case the bug does no longer reproduce.
+
+verify-branch=b1;b2;b3.. - Using this command, it is possible to check if the test reproduces on one or more specified branches (e.g. mozilla-aurora). JSBugMon will comment with the result for every branch in the bug.
+
+
+
+== What JSBugMon currently supports (or does not support) ==
+
+JSBugMon currently only works with regular 32 and 64 bit Linux builds. It does not support:
+
+  * Threadsafe builds
+  * Builds with additional flags like --enable-more-determinism, --enable-root-analysis
+  * Checking a test with Valgrind or ASan
