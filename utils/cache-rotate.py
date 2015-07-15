@@ -30,6 +30,7 @@ def main():
             if binPath:
                 if not oldestShellDirAtime or os.path.getatime(binPath) < oldestShellDirAtime:
                     oldestShellDir = os.path.join(path, shellDir)
+                    oldestShellDirAtime = os.path.getatime(binPath)
         
         if oldestShellDir:
             shutil.rmtree(oldestShellDir)
