@@ -44,15 +44,19 @@ options = {
     'field0-0-0':       'bug_group',
     'type0-0-0':        'substring',
     'value0-0-0':       'core-security',
-     # or have an [sg: tag in whiteboard
-    'type0-0-1':        'regexp',
-    'field0-0-1':       'status_whiteboard',
-    'value0-0-1':       '\[sg:(critical|high|moderate|low)',
     # or have a sec- keyword 
-    'type0-0-2':        'regexp',
+    'type0-0-1':        'regexp',
+    'field0-0-1':       'keywords',
+    'value0-0-1':       '(sec-critical|sec-high|sec-moderate|sec-low)',
+    # or have explicitely been requested for verification
+    'type0-0-2':        'substring',
     'field0-0-2':       'keywords',
-    'value0-0-2':       '(sec-critical|sec-high|sec-moderate|sec-low)',
-    'include_fields':   '_default',
+    'value0-0-2':       'verifyme',
+    # and are part of a JavaScript component
+    'type1-0-0':        'regexp',
+    'field1-0-0':       'component',
+    'value1-0-0':       '^JavaScript.*',
+    'include_fields':   'id',
 }
 
 # Get the bugs from the api
