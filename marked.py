@@ -35,7 +35,7 @@ options = {
     'field0-0-0':       'status_whiteboard',
     'type0-0-0':        'substring',
     'value0-0-0':       '[jsbugmon:',
-    'include_fields':   '_default',
+    'include_fields':   'id',
 }
 
 # Get the bugs from the api
