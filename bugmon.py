@@ -86,11 +86,6 @@ def parseOpts():
                       default=False,
                       help='Update the bug also when it not changes state. Defaults to "False"')
 
-    parser.add_option('-G', '--guess-opts',
-                      dest='guessopts',
-                      action='store_true',
-                      default=False,
-                      help='Force guessing the JS shell options. Defaults to "False"')
 
     (options, args) = parser.parse_args()
 
@@ -164,11 +159,30 @@ class BugMonitor:
     # Here we store the tip revision per repository for caching purposes
     self.tipRev = {}
 
-    self.guessopts = {}
-    #self.guessopts['mozilla-central'] = ['-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a', None]
-    #self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m --ion-eager', None, '--ion-eager']
-    self.guessopts['ionmonkey'] = ['--ion -n -m', '--ion -n -m -a', '--ion -n -m --ion-eager', '--ion -n -m --ion-eager -a' ]
-    self.guessopts['mozilla-central'] = [None, '--ion-eager', '-m --ion-eager', '-m -a --ion-eager', '--no-ion', '-a', '-a --no-ion', '-a --no-ti', '--no-jm', '-a --no-jm', '-m -n', '-m -n -a', '-m', '-j', '-j -m', '-j -m -a']
+    self.allowedOpts = [ 
+        '--ion-eager',
+        '--baseline-eager',
+        '--ion-regalloc=backtracking',
+        '--ion-regalloc=lsra',
+        '--thread-count=2',
+        '--ion-parallel-compile=off',
+        '--ion-offthread-compile=off',
+        '--ion-check-range-analysis',
+        '--ion-gvn=pessimistic',
+        '--ion-gvn=off',
+        '--no-ion',
+        '--no-baseline',
+        '--arm-sim-icache-checks',
+        '--arm-asm-nop-fill=1',
+        '--no-threads',
+        '--unboxed-objects',
+	'--ion-fuzzer-checks',
+	'--ion-extra-checks',
+        '--arm-hwcap=vfp',
+        '--ion-shared-stubs=on',
+        '--ion-pgo=on',
+        '-D'
+    ]
 
     # Misc options
     self.options = options

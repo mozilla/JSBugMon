@@ -48,7 +48,7 @@ if len(buglist) == 0:
 print "Found %s bugs:" % (len(buglist))
 
 # Basic arguments
-cmd = ['python', os.path.join(sys.path[0], 'bugmon.py'), '-r', os.path.join(sys.path[0], 'repos/'), "-p", "-G" ]
+cmd = ['python', os.path.join(sys.path[0], 'bugmon.py'), '-r', os.path.join(sys.path[0], 'repos/'), "-p" ]
 
 # Propagate all extra arguments
 cmd.extend(sys.argv[1:])
