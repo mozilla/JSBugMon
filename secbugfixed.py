@@ -30,14 +30,12 @@ bmo = BMOAgent(username, password)
 
 # Search for all fixed JS engine bugs that have a security impact
 options = {
-    # Must be a JS Engine bug which is RESOLVED FIXED
-    'component':        'JavaScript Engine',
+    # Must be a JS Engine bug which is FIXED
     'product':          'Core',
-    'bug_status':       'RESOLVED',
     'resolution':       'FIXED',
-    # Ignore old bugs, should be fixed at most 30 days ago
+    # Ignore old bugs, should be fixed at most 90 days ago
     'chfieldto':        'Now',
-    'chfieldfrom':      '-30d',
+    'chfieldfrom':      '-90d',
     'chfield':          'resolution',
     'chfieldvalue':     'FIXED',
      # Advanced search criteria
