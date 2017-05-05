@@ -28,6 +28,9 @@ def main():
                 continue
             
             if binPath:
+                if not os.path.exists(binPath):
+                    binPath = os.path.join(path, shellDir)
+
                 if not oldestShellDirAtime or os.path.getatime(binPath) < oldestShellDirAtime:
                     oldestShellDir = os.path.join(path, shellDir)
                     oldestShellDirAtime = os.path.getatime(binPath)
