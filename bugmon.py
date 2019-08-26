@@ -752,7 +752,7 @@ class BugMonitor:
 
     buildFlags = []
 
-    checkFlags = ["--enable-more-deterministic", "--enable-simulator=arm", "--enable-arm-simulator", "--enable-debug", "--disable-debug", "--enable-optimize", "--disable-optimize"]
+    checkFlags = ["--enable-more-deterministic", "--enable-simulator=arm", "--enable-simulator=arm64", "--enable-arm-simulator", "--enable-debug", "--disable-debug", "--enable-optimize", "--disable-optimize"]
 
     for flag in checkFlags:
       if (re.search(flag + "[^-a-zA-Z0-9]", text) != None):
@@ -825,6 +825,9 @@ class BugMonitor:
     elif (bug.platform == "ARM"):
       arch = "32"
       buildFlags.append("--enable-simulator=arm")
+    elif (bug.platform == "ARM64"):
+      arch = "64"
+      buildFlags.append("--enable-simulator=arm64")
     else:
       raise BugException("Error: Unsupported architecture \"" + bug.platform + "\" required by bug")
 
