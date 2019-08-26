@@ -784,6 +784,9 @@ class BugMonitor:
         else:
           optsCopy.append(opt)
       viableOptsList.append(optsCopy)
+
+    if '--fuzzing-safe' not in opts:
+      opts.append('--fuzzing-safe')
     
     if (bug.version == "Trunk"):
       reponame = "mozilla-central"
