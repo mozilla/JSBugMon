@@ -172,6 +172,7 @@ class BugMonitor:
         '--ion-regalloc=backtracking',
         '--ion-regalloc=lsra',
         '--thread-count=2',
+        '--cpu-count=2',
         '--ion-parallel-compile=off',
         '--ion-offthread-compile=off',
         '--ion-check-range-analysis',
@@ -188,6 +189,13 @@ class BugMonitor:
         '--arm-hwcap=vfp',
         '--ion-shared-stubs=on',
         '--ion-pgo=on',
+        '--nursery-strings=on',
+        '--nursery-strings=off',
+        '--enable-experimental-fields',
+        '--ion-warmup-threshold=0',
+        '--ion-warmup-threshold=1',
+        '--baseline-warmup-threshold=0',
+        '--baseline-warmup-threshold=1',
         '-D'
     ]
 
