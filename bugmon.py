@@ -166,6 +166,7 @@ class BugMonitor:
     self.tipRev = {}
 
     self.allowedOpts = [ 
+        '--fuzzing-safe',
         '--ion-eager',
         '--baseline-eager',
         '--ion-regalloc=backtracking',
@@ -749,6 +750,8 @@ class BugMonitor:
       if (re.search(flag + "[^-a-zA-Z0-9]", text) != None):
         buildFlags.append(flag)
 
+    # Flags to use when searching for the test ("scanning") using SyntaxError method
+    scanOpts = ['--fuzzing-safe']
     viableOptsList = []
     opts = []
 
@@ -841,7 +844,7 @@ class BugMonitor:
         outFile.write(block)
         outFile.close()
         print "Testing syntax with shell %s" % testShell
-        (err, ret) = testBinary(testShell, testFile, [], 0, timeout=30)
+        (err, ret) = testBinary(testShell, testFile, scanOpts, 0, timeout=30)
 
         if (err.find("SyntaxError") < 0):
           # We have found the test (or maybe only the start of the test)
@@ -856,7 +859,7 @@ class BugMonitor:
               outFile = open(testFile, "w")
               outFile.write(curBlock)
               outFile.close()
-              (err, ret) = testBinary(testShell, testFile, [], 0, timeout=30)
+              (err, ret) = testBinary(testShell, testFile, scanOpts, 0, timeout=30)
               if (err.find("SyntaxError") >= 0):
                 # Too much, write oldBlock and break
                 outFile = open(testFile, "w")
@@ -886,7 +889,7 @@ class BugMonitor:
               outFile = open(testFile, "w")
               outFile.write(rawData)
               outFile.close()
-              (err, ret) = testBinary(testShell, testFile, [], 0, timeout=30)
+              (err, ret) = testBinary(testShell, testFile, scanOpts, 0, timeout=30)
               if (err.find("SyntaxError") < 0):
                 # Found something that looks like JS :)
                 found = True
