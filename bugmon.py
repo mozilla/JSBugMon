@@ -769,6 +769,10 @@ class BugMonitor:
 
     viableOptsList.append(opts)
 
+    # We need to use experimental fields when scanning, otherwise we get a syntax error
+    if '--enable-experimental-fields' in opts:
+      scanOpts.append('--enable-experimental-fields')
+
     print "Extracted options: %s" % (' '.join(opts))
 
     # Special hack for flags that changed
